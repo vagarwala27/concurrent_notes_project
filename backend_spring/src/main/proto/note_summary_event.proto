@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "com.notes.app.grpc";
+
+message NoteSummaryEvent {
+  string eventId = 1;
+  string noteId = 2;
+  string content = 3;
+  int64 timestamp = 4;
+}
