@@ -1,8 +1,9 @@
 package com.notes.app.service;
 
+import com.notes.app.data.EventLogRepository;
 import com.notes.app.data.Note;
 import com.notes.app.data.NoteRepository;
-import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -13,11 +14,14 @@ public class NoteService {
   private static final String NOTE_SUMMARY_EVENT_QUEUE = "note_summary_event_queue";
 
   private final NoteRepository noteRepository;
-  private final StringRedisTemplate redis;
+  private final RedisTemplate<String, byte[]> redis;
+  private final EventLogRepository eventLogRepository;
 
-  public NoteService(NoteRepository noteRepository, StringRedisTemplate redis) {
+  public NoteService(NoteRepository noteRepository, RedisTemplate<String, byte[]> redis,
+      EventLogRepository eventLogRepository) {
     this.noteRepository = noteRepository;
     this.redis = redis;
+    this.eventLogRepository = eventLogRepository;
   }
 
   public List<Note> getAllNotes() {
@@ -29,7 +33,6 @@ public class NoteService {
   }
 
   public Note createNote(String content, String color) {
-    // validate content and color
     Note note = noteRepository.save(new Note(content, color));
 
     String event = note.getId() + "::" + content;
