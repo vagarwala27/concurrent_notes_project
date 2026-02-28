@@ -3,7 +3,9 @@ package com.notes.app.grpc;
 import com.notes.app.grpc.NoteSummaryRequest;
 import com.notes.app.grpc.NoteSummaryResponse;
 import com.notes.app.grpc.NoteSummaryServiceGrpc;
+import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
+import java.util.concurrent.ThreadLocalRandom;
 import net.devh.boot.grpc.server.service.GrpcService;
 
 /**
@@ -26,8 +28,13 @@ public class MockNoteSummaryService extends NoteSummaryServiceGrpc.NoteSummarySe
 
     // simulate heavy work load time
     try {
-      Thread.sleep(500);
+      long sleepMs = ThreadLocalRandom.current().nextLong(2000, 5001);
+      Thread.sleep(sleepMs);
     } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      responseObserver.onError(
+          Status.CANCELLED.withDescription("Summary generation interrupted").withCause(e).asRuntimeException());
+      return;
     }
 
     // creating mock summary
