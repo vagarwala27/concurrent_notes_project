@@ -55,4 +55,28 @@ public class NoteService {
 
     return note;
   }
+
+  public Optional<Note> updateNote(Long noteId, String content, String color) {
+    return noteRepository.findById(noteId).map(note -> {
+      note.setContent(content);
+      note.setColor(color);
+      Note updatedNote = noteRepository.save(note);
+
+      EventLog eventLog = new EventLog();
+      eventLog.setNoteId(updatedNote.getId());
+      eventLog.setStatus(EventLog.Status.QUEUED);
+      EventLog savedEventLog = eventLogRepository.save(eventLog);
+
+      NoteSummaryEvent event = NoteSummaryEvent.newBuilder()
+          .setEventId(savedEventLog.getId().toString())
+          .setNoteId(updatedNote.getId().toString())
+          .setContent(updatedNote.getContent())
+          .setTimestamp(System.currentTimeMillis())
+          .build();
+
+      redisTemplate.opsForList().leftPush(NOTE_CREATED_QUEUE, event.toByteArray());
+
+      return updatedNote;
+    });
+  }
 }
