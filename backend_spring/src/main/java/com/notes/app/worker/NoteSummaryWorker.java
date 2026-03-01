@@ -1,13 +1,18 @@
 package com.notes.app.worker;
 
 import java.time.Duration;
+import java.util.Optional;
 
 import org.springframework.context.event.EventListener;
-import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Component;
 
 import net.devh.boot.grpc.client.inject.GrpcClient;
 
+import com.google.protobuf.InvalidProtocolBufferException;
+import com.notes.app.data.EventLog;
+import com.notes.app.data.EventLogRepository;
+import com.notes.app.grpc.NoteSummaryEvent;
 import com.notes.app.grpc.NoteSummaryRequest;
 import com.notes.app.grpc.NoteSummaryResponse;
 import com.notes.app.grpc.NoteSummaryServiceGrpc;
@@ -17,34 +22,40 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 
 @Component
 public class NoteSummaryWorker {
-  private final StringRedisTemplate redis;
+  private static final String NOTE_CREATED_QUEUE = "note_created";
+
+  private final RedisTemplate<String, byte[]> redisTemplate;
   private final SimpMessagingTemplate socket;
+  private final EventLogRepository eventLogRepository;
 
   @GrpcClient("note-summary-service")
   private NoteSummaryServiceGrpc.NoteSummaryServiceBlockingStub mockSummaryService;
 
-  public NoteSummaryWorker(StringRedisTemplate redis, SimpMessagingTemplate socket) {
-    this.redis = redis;
+  public NoteSummaryWorker(RedisTemplate<String, byte[]> redisTemplate, SimpMessagingTemplate socket,
+      EventLogRepository eventLogRepository) {
+    this.redisTemplate = redisTemplate;
     this.socket = socket;
+    this.eventLogRepository = eventLogRepository;
   }
 
   @EventListener(ApplicationReadyEvent.class)
   public void startWorker() {
     new Thread(() -> {
       System.out
-          .println("NoteSummaryWorker.java: Summary Worker started. Listening for note_summary_event_queue events");
+          .println("NoteSummaryWorker.java: Summary Worker started. Listening for note_created events");
       while (true) {
         try {
-          String event = redis.opsForList().leftPop("note_summary_event_queue", Duration.ofSeconds(30));
+          byte[] eventBytes = redisTemplate.opsForList().leftPop(NOTE_CREATED_QUEUE, Duration.ofSeconds(30));
 
-          if (event != null) {
-            System.out.println("NoteSummaryWorker.java: Received event: " + event);
+          if (eventBytes != null) {
+            NoteSummaryEvent event = NoteSummaryEvent.parseFrom(eventBytes);
+            System.out.println("NoteSummaryWorker.java: Received eventId: " + event.getEventId());
             generateSummary(event);
           }
-          // if null, just loop and wait again
+        } catch (InvalidProtocolBufferException e) {
+          System.err.println("Error parsing NoteSummaryEvent payload: " + e.getMessage());
         } catch (Exception e) {
           if (e.getMessage() != null && e.getMessage().contains("timed out")) {
-            // ignore timeout, just loop again
             continue;
           }
           System.err.println("Error processing event: " + e.getMessage());
@@ -54,10 +65,21 @@ public class NoteSummaryWorker {
     }).start();
   }
 
-  private void generateSummary(String event) {
-    String[] parts = event.split("::", 2);
-    String noteId = parts[0];
-    String content = parts[1];
+  private void generateSummary(NoteSummaryEvent event) {
+    String noteId = event.getNoteId();
+    String content = event.getContent();
+
+    try {
+      Long eventLogId = Long.parseLong(event.getEventId());
+      Optional<EventLog> eventLog = eventLogRepository.findById(eventLogId);
+      if (eventLog.isPresent()) {
+        EventLog log = eventLog.get();
+        log.setStatus(EventLog.Status.PROCESSING);
+        eventLogRepository.save(log);
+      }
+    } catch (NumberFormatException e) {
+      System.err.println("Invalid eventId in NoteSummaryEvent: " + event.getEventId());
+    }
 
     // generate summary (for demo just take first 20 chars)
     String summary = content.length() > 20 ? content.substring(0, 20) + "..." : content;
