@@ -1,27 +1,90 @@
-import { Suspense } from "react";
+"use client";
+
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { NoteCard } from "@/components/molecules/note-card";
-import { AsyncEditPanel } from "@/components/organisms/edit-panel/async-edit-panel";
-import { EditPanelSkeleton } from "@/components/organisms/edit-panel/edit-panel-skeleton";
+import { EditPanel } from "@/components/organisms/edit-panel/edit-panel";
+import { Client } from "@stomp/stompjs";
 import { Note } from "@/types/note";
-
-const API_URL = process.env.API_URL || "http://127.0.0.1:8000";
-
-async function fetchNotes(): Promise<Note[]> {
-  const response = await fetch(`${API_URL}/api/notes`, { cache: "no-store" });
-  // db.getNotes() simulation
-  if (!response.ok) {
-    throw new Error("Failed to fetch notes");
-  }
-  return response.json();
-}
 
 interface NotesListProps {
   selectedNoteId?: string;
 }
 
-export async function NotesList({ selectedNoteId }: NotesListProps) {
-  const notes = await fetchNotes();
+interface NotesQueryResponse {
+  data?: {
+    notes?: Array<{
+      id: string;
+      content: string;
+      color?: string;
+      updatedAt?: string;
+    }>;
+  };
+}
+
+export function NotesList({ selectedNoteId }: NotesListProps) {
+  const [notes, setNotes] = useState<Note[]>([]);
+
+  useEffect(() => {
+    const loadNotes = async () => {
+      const response = await fetch("/graphql", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          query: `
+            query {
+              notes {
+                id
+                content
+                color
+                updatedAt
+              }
+            }
+          `,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to fetch notes");
+      }
+
+      const payload: NotesQueryResponse = await response.json();
+      const mappedNotes: Note[] =
+        payload.data?.notes?.map((note) => ({
+          id: note.id,
+          content: note.content,
+          color: note.color,
+          date: note.updatedAt,
+        })) ?? [];
+      setNotes(mappedNotes);
+    };
+
+    loadNotes().catch((error) => {
+      console.error(error);
+    });
+  }, []);
+
+  useEffect(() => {
+    const client = new Client({
+      brokerURL: "ws://localhost:8000/ws",
+      onConnect: () => {
+        client.subscribe("/topic/note-summaries", (message) => {
+          console.log(message.body);
+        });
+      },
+    });
+
+    client.activate();
+    return () => {
+      client.deactivate();
+    };
+  }, []);
+
+  const selectedNote = selectedNoteId
+    ? notes.find((n) => n.id === selectedNoteId) ?? null
+    : null;
 
   if (notes.length === 0) {
     return (
@@ -47,10 +110,8 @@ export async function NotesList({ selectedNoteId }: NotesListProps) {
         ))}
       </ul>
 
-      {selectedNoteId && (
-        <Suspense key={selectedNoteId} fallback={<EditPanelSkeleton />}>
-          <AsyncEditPanel noteId={selectedNoteId} />
-        </Suspense>
+      {selectedNote && (
+        <EditPanel initialNote={selectedNote} />
       )}
     </div>
   );
