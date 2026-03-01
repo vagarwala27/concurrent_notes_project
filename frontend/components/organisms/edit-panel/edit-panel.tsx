@@ -9,30 +9,59 @@ import { Note } from "@/types/note";
 
 interface EditPanelProps {
   initialNote: Note;
+  onNoteUpdated?: (note: Note) => void;
+  onNoteDeleted?: (noteId: string) => void;
 }
 
-const API_URL = "/api/notes";
+const GRAPHQL_URL = "http://localhost:8000/graphql";
 
-export function EditPanel({ initialNote }: EditPanelProps) {
+export function EditPanel({
+  initialNote,
+  onNoteUpdated,
+  onNoteDeleted,
+}: EditPanelProps) {
   const router = useRouter();
 
   const handleUpdate = async (updatedNote: {
     content: string;
     color: string;
   }) => {
-    const response = await fetch(`${API_URL}/${initialNote.id}`, {
-      method: "PUT",
+    const response = await fetch(GRAPHQL_URL, {
+      method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "Accept": "application/json",
       },
       body: JSON.stringify({
-        content: updatedNote.content,
-        color: updatedNote.color,
+        query: `
+          mutation UpdateNote($noteId: ID!, $input: NoteInput!) {
+            updateNote(noteId: $noteId, input: $input) {
+              id
+              content
+              color
+            }
+          }
+        `,
+        variables: {
+          noteId: initialNote.id,
+          input: {
+            content: updatedNote.content,
+            color: updatedNote.color,
+          },
+        },
       }),
     });
 
-    if (response.ok) {
-      router.refresh();
+    const payload = await response.json();
+    if (response.ok && !payload.errors) {
+      const updated = payload?.data?.updateNote;
+      if (updated) {
+        onNoteUpdated?.({
+          id: updated.id,
+          content: updated.content,
+          color: updated.color,
+        });
+      }
       router.push("/");
     }
   };
@@ -42,12 +71,27 @@ export function EditPanel({ initialNote }: EditPanelProps) {
       return;
     }
 
-    const response = await fetch(`${API_URL}/${initialNote.id}`, {
-      method: "DELETE",
+    const response = await fetch(GRAPHQL_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+      },
+      body: JSON.stringify({
+        query: `
+          mutation DeleteNote($noteId: ID!) {
+            deleteNote(noteId: $noteId)
+          }
+        `,
+        variables: {
+          noteId: initialNote.id,
+        },
+      }),
     });
 
-    if (response.ok) {
-      router.refresh();
+    const payload = await response.json();
+    if (response.ok && !payload.errors && payload.data?.deleteNote === true) {
+      onNoteDeleted?.(initialNote.id);
       router.push("/");
     }
   };

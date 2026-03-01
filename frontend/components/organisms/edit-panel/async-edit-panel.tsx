@@ -1,19 +1,44 @@
 import { EditPanel } from "@/components/organisms/edit-panel/edit-panel";
 import { Note } from "@/types/note";
 
-const API_URL = process.env.API_URL || "http://127.0.0.1:8000";
+const GRAPHQL_URL = "http://localhost:8000/graphql";
 
 async function fetchNoteById(id: string): Promise<Note | null> {
-  // To simulate DB latency, uncomment the following line:
-  await new Promise((resolve) => setTimeout(resolve, 1000));
-
-  const response = await fetch(`${API_URL}/api/notes/${id}`, {
+  const response = await fetch(GRAPHQL_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+    },
+    body: JSON.stringify({
+      query: `
+        query NoteById($noteId: ID!) {
+          note(noteId: $noteId) {
+            id
+            content
+            color
+          }
+        }
+      `,
+      variables: {
+        noteId: id,
+      },
+    }),
     cache: "no-store",
   });
   if (!response.ok) {
     return null;
   }
-  return response.json();
+  const payload = await response.json();
+  const note = payload?.data?.note;
+  if (!note) {
+    return null;
+  }
+  return {
+    id: note.id,
+    content: note.content,
+    color: note.color,
+  };
 }
 
 interface AsyncEditPanelProps {

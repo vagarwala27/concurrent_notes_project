@@ -4,8 +4,9 @@ type Query {
 }
 
 type Mutation {
-  # createNote(content: String!, color: String): Note!
   createNote(input: NoteInput!): Note!
+  updateNote(noteId: ID!, input: NoteInput!): Note
+  deleteNote(noteId: ID!): Boolean!
 }
 
 input NoteInput {
@@ -17,5 +18,6 @@ type Note {
   id: ID!
   content: String!
   color: String!
+  summary: String
   updatedAt: String!
 }

@@ -79,6 +79,13 @@ public class NoteSummaryWorker {
         log.setStatus(EventLog.Status.PROCESSING);
         eventLogRepository.save(log);
       }
+
+      Map<String, Object> processingPayload = Map.of(
+          "noteId", noteId,
+          "status", "PROCESSING",
+          "content", content,
+          "timestamp", event.getTimestamp());
+      messagingTemplate.convertAndSend("/topic/note-summaries", processingPayload);
     } catch (NumberFormatException e) {
       System.err.println("Invalid eventId in NoteSummaryEvent: " + event.getEventId());
     }
@@ -97,8 +104,9 @@ public class NoteSummaryWorker {
       Map<String, Object> payload = Map.of(
           "noteId", noteId,
           "status", "COMPLETED",
+          "content", content,
           "summary", response.getSummary(),
-          "timestamp", System.currentTimeMillis());
+          "timestamp", event.getTimestamp());
       messagingTemplate.convertAndSend("/topic/note-summaries", payload);
     } catch (Exception e) {
       if (eventLog.isPresent()) {
@@ -109,7 +117,9 @@ public class NoteSummaryWorker {
 
       Map<String, Object> payload = Map.of(
           "noteId", noteId,
-          "status", "FAILED");
+          "status", "FAILED",
+          "content", content,
+          "timestamp", event.getTimestamp());
       messagingTemplate.convertAndSend("/topic/note-summaries", payload);
     }
 

@@ -5,7 +5,7 @@ import { NoteForm } from "@/components/organisms/note-form";
 import { Header } from "@/components/organisms/header";
 import { useState } from "react";
 
-const API_URL = "/api/notes";
+const GRAPHQL_URL = "http://localhost:8000/graphql";
 
 type Status = "idle" | "submitting" | "success" | "error";
 
@@ -22,24 +22,45 @@ export default function AddNotePage() {
     setStatus("submitting");
 
     try {
-      const response = await fetch(API_URL, {
+      const response = await fetch(GRAPHQL_URL, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "Accept": "application/json",
         },
         body: JSON.stringify({
-          content: note.content,
-          color: note.color,
+          query: `
+            mutation CreateNote($input: NoteInput!) {
+              createNote(input: $input) {
+                id
+              }
+            }
+          `,
+          variables: {
+            input: {
+              content: note.content,
+              color: note.color,
+            },
+          },
         }),
       });
 
-      if (response.ok) {
+      const payload = await response.json();
+
+      if (response.ok && !payload.errors) {
         setStatus("success");
         setError(null);
-
-        router.push("/");
+        const createdId = payload?.data?.createNote?.id;
+        if (createdId) {
+          router.push(`/?pendingNoteId=${encodeURIComponent(createdId)}`);
+        } else {
+          router.push("/");
+        }
+      } else {
+        setStatus("error");
+        setError("Error: Failed to add note.");
       }
-    } catch (error) {
+    } catch {
       setStatus("error");
       setError("Error: Failed to add note.");
     }
@@ -56,6 +77,7 @@ export default function AddNotePage() {
 
       <section className="bg-white p-6 rounded-lg shadow-sm">
         <NoteForm onSubmit={handleAddNote} />
+        {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
       </section>
     </main>
   );

@@ -5,25 +5,32 @@ import com.notes.app.data.EventLogRepository;
 import com.notes.app.data.Note;
 import com.notes.app.data.NoteRepository;
 import com.notes.app.grpc.NoteSummaryEvent;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Service
 public class NoteService {
   private static final String NOTE_CREATED_QUEUE = "note_created";
+  private static final AtomicLong LAST_EVENT_TIMESTAMP = new AtomicLong(0L);
 
   private final NoteRepository noteRepository;
   private final RedisTemplate<String, byte[]> redisTemplate;
   private final EventLogRepository eventLogRepository;
+  private final SimpMessagingTemplate messagingTemplate;
 
   public NoteService(NoteRepository noteRepository, RedisTemplate<String, byte[]> redisTemplate,
-      EventLogRepository eventLogRepository) {
+      EventLogRepository eventLogRepository, SimpMessagingTemplate messagingTemplate) {
     this.noteRepository = noteRepository;
     this.redisTemplate = redisTemplate;
     this.eventLogRepository = eventLogRepository;
+    this.messagingTemplate = messagingTemplate;
   }
 
   public List<Note> getAllNotes() {
@@ -36,6 +43,11 @@ public class NoteService {
 
   public Note createNote(String content, String color) {
     Note note = noteRepository.save(new Note(content, color));
+    long eventTimestamp = nextEventTimestamp();
+
+    messagingTemplate.convertAndSend("/topic/note-summaries", Map.of(
+        "status", "NOTES_REFRESH",
+        "timestamp", eventTimestamp));
 
     EventLog eventLog = new EventLog();
     eventLog.setNoteId(note.getId());
@@ -46,7 +58,7 @@ public class NoteService {
         .setEventId(savedEventLog.getId().toString())
         .setNoteId(note.getId().toString())
         .setContent(note.getContent())
-        .setTimestamp(System.currentTimeMillis())
+        .setTimestamp(eventTimestamp)
         .build();
 
     redisTemplate.opsForList().leftPush(NOTE_CREATED_QUEUE, event.toByteArray());
@@ -58,9 +70,22 @@ public class NoteService {
 
   public Optional<Note> updateNote(Long noteId, String content, String color) {
     return noteRepository.findById(noteId).map(note -> {
+      String currentContent = normalizeContent(note.getContent());
+      String incomingContent = normalizeContent(content);
+      boolean contentChanged = !Objects.equals(currentContent, incomingContent);
+
       note.setContent(content);
       note.setColor(color);
       Note updatedNote = noteRepository.save(note);
+      long eventTimestamp = nextEventTimestamp();
+
+      messagingTemplate.convertAndSend("/topic/note-summaries", Map.of(
+          "status", "NOTES_REFRESH",
+          "timestamp", eventTimestamp));
+
+      if (!contentChanged) {
+        return updatedNote;
+      }
 
       EventLog eventLog = new EventLog();
       eventLog.setNoteId(updatedNote.getId());
@@ -71,12 +96,35 @@ public class NoteService {
           .setEventId(savedEventLog.getId().toString())
           .setNoteId(updatedNote.getId().toString())
           .setContent(updatedNote.getContent())
-          .setTimestamp(System.currentTimeMillis())
+          .setTimestamp(eventTimestamp)
           .build();
 
       redisTemplate.opsForList().leftPush(NOTE_CREATED_QUEUE, event.toByteArray());
 
       return updatedNote;
     });
+  }
+
+  public boolean deleteNote(Long noteId) {
+    if (!noteRepository.existsById(noteId)) {
+      return false;
+    }
+    noteRepository.deleteById(noteId);
+    messagingTemplate.convertAndSend("/topic/note-summaries", Map.of(
+        "status", "NOTES_REFRESH",
+        "timestamp", nextEventTimestamp()));
+    return true;
+  }
+
+  private String normalizeContent(String value) {
+    if (value == null) {
+      return "";
+    }
+    return value.replace("\r\n", "\n").trim();
+  }
+
+  private long nextEventTimestamp() {
+    long now = System.currentTimeMillis();
+    return LAST_EVENT_TIMESTAMP.updateAndGet(previous -> now > previous ? now : previous + 1);
   }
 }
