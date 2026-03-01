@@ -1,6 +1,7 @@
 package com.notes.app.worker;
 
 import java.time.Duration;
+import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.context.event.EventListener;
@@ -25,16 +26,16 @@ public class NoteSummaryWorker {
   private static final String NOTE_CREATED_QUEUE = "note_created";
 
   private final RedisTemplate<String, byte[]> redisTemplate;
-  private final SimpMessagingTemplate socket;
+  private final SimpMessagingTemplate messagingTemplate;
   private final EventLogRepository eventLogRepository;
 
   @GrpcClient("note-summary-service")
   private NoteSummaryServiceGrpc.NoteSummaryServiceBlockingStub mockSummaryService;
 
-  public NoteSummaryWorker(RedisTemplate<String, byte[]> redisTemplate, SimpMessagingTemplate socket,
+  public NoteSummaryWorker(RedisTemplate<String, byte[]> redisTemplate, SimpMessagingTemplate messagingTemplate,
       EventLogRepository eventLogRepository) {
     this.redisTemplate = redisTemplate;
-    this.socket = socket;
+    this.messagingTemplate = messagingTemplate;
     this.eventLogRepository = eventLogRepository;
   }
 
@@ -68,10 +69,11 @@ public class NoteSummaryWorker {
   private void generateSummary(NoteSummaryEvent event) {
     String noteId = event.getNoteId();
     String content = event.getContent();
+    Optional<EventLog> eventLog = Optional.empty();
 
     try {
       Long eventLogId = Long.parseLong(event.getEventId());
-      Optional<EventLog> eventLog = eventLogRepository.findById(eventLogId);
+      eventLog = eventLogRepository.findById(eventLogId);
       if (eventLog.isPresent()) {
         EventLog log = eventLog.get();
         log.setStatus(EventLog.Status.PROCESSING);
@@ -81,18 +83,35 @@ public class NoteSummaryWorker {
       System.err.println("Invalid eventId in NoteSummaryEvent: " + event.getEventId());
     }
 
-    // generate summary (for demo just take first 20 chars)
-    String summary = content.length() > 20 ? content.substring(0, 20) + "..." : content;
+    try {
+      NoteSummaryResponse response = mockSummaryService.getNoteSummary(
+          NoteSummaryRequest.newBuilder().setContent(content).setNoteId(noteId).build());
 
-    // get the summary from the mock gRPC AI service
-    NoteSummaryResponse response = mockSummaryService.getNoteSummary(
-        NoteSummaryRequest.newBuilder().setContent(content).setNoteId(noteId).build());
+      if (eventLog.isPresent()) {
+        EventLog log = eventLog.get();
+        log.setStatus(EventLog.Status.COMPLETED);
+        log.setSummary(response.getSummary());
+        eventLogRepository.save(log);
+      }
 
-    // send summary to frontend via websocket
-    String destination = "/topic/note-summaries";
-    String payload = noteId + "::" + response.getSummary();
-    socket.convertAndSend(destination, payload);
-    System.out.println("NoteSummaryWorker.java: Sent to WebSocket " + destination + ": " + payload);
+      Map<String, Object> payload = Map.of(
+          "noteId", noteId,
+          "status", "COMPLETED",
+          "summary", response.getSummary(),
+          "timestamp", System.currentTimeMillis());
+      messagingTemplate.convertAndSend("/topic/note-summaries", payload);
+    } catch (Exception e) {
+      if (eventLog.isPresent()) {
+        EventLog log = eventLog.get();
+        log.setStatus(EventLog.Status.FAILED);
+        eventLogRepository.save(log);
+      }
+
+      Map<String, Object> payload = Map.of(
+          "noteId", noteId,
+          "status", "FAILED");
+      messagingTemplate.convertAndSend("/topic/note-summaries", payload);
+    }
 
     /**
      * Paste into localhost:8000 dev console to test WebSocket connection:
