@@ -11,7 +11,6 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -70,10 +69,6 @@ public class NoteService {
 
   public Optional<Note> updateNote(Long noteId, String content, String color) {
     return noteRepository.findById(noteId).map(note -> {
-      String currentContent = normalizeContent(note.getContent());
-      String incomingContent = normalizeContent(content);
-      boolean contentChanged = !Objects.equals(currentContent, incomingContent);
-
       note.setContent(content);
       note.setColor(color);
       Note updatedNote = noteRepository.save(note);
@@ -82,10 +77,6 @@ public class NoteService {
       messagingTemplate.convertAndSend("/topic/note-summaries", Map.of(
           "status", "NOTES_REFRESH",
           "timestamp", eventTimestamp));
-
-      if (!contentChanged) {
-        return updatedNote;
-      }
 
       EventLog eventLog = new EventLog();
       eventLog.setNoteId(updatedNote.getId());
@@ -114,13 +105,6 @@ public class NoteService {
         "status", "NOTES_REFRESH",
         "timestamp", nextEventTimestamp()));
     return true;
-  }
-
-  private String normalizeContent(String value) {
-    if (value == null) {
-      return "";
-    }
-    return value.replace("\r\n", "\n").trim();
   }
 
   private long nextEventTimestamp() {
