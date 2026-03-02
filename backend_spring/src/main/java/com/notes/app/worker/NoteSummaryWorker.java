@@ -93,11 +93,29 @@ public class NoteSummaryWorker {
     try {
       NoteSummaryResponse response = mockSummaryService.getNoteSummary(
           NoteSummaryRequest.newBuilder().setContent(content).setNoteId(noteId).build());
+      String summary = response.getSummary();
+
+      if (summary == null || summary.trim().isEmpty()) {
+        if (eventLog.isPresent()) {
+          EventLog log = eventLog.get();
+          log.setStatus(EventLog.Status.FAILED);
+          log.setSummary(null);
+          eventLogRepository.save(log);
+        }
+
+        Map<String, Object> payload = Map.of(
+            "noteId", noteId,
+            "status", "FAILED",
+            "content", content,
+            "timestamp", event.getTimestamp());
+        messagingTemplate.convertAndSend("/topic/note-summaries", payload);
+        return;
+      }
 
       if (eventLog.isPresent()) {
         EventLog log = eventLog.get();
         log.setStatus(EventLog.Status.COMPLETED);
-        log.setSummary(response.getSummary());
+        log.setSummary(summary);
         eventLogRepository.save(log);
       }
 
@@ -105,7 +123,7 @@ public class NoteSummaryWorker {
           "noteId", noteId,
           "status", "COMPLETED",
           "content", content,
-          "summary", response.getSummary(),
+          "summary", summary,
           "timestamp", event.getTimestamp());
       messagingTemplate.convertAndSend("/topic/note-summaries", payload);
     } catch (Exception e) {
